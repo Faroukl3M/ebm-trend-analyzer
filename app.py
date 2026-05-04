@@ -58,6 +58,22 @@ with st.sidebar:
     if total != 100:
         st.warning(f"Total = {total}% (doit être 100%)")
 
+    st.subheader("🎵 TikTok Scraping")
+    enable_tiktok = st.toggle(
+        "Activer le scraping TikTok",
+        value=False,
+        help="Utilise TikTokApi (non-officiel). Nécessite Playwright. Fallback automatique si ça échoue."
+    )
+    if enable_tiktok:
+        st.warning("⚠️ Non-officiel — usage interne uniquement.")
+        tiktok_hashtags_input = st.text_input(
+            "Hashtags (séparés par virgule)",
+            value="hairtok,naturalhair,skincare,wiginstall,tiktokmademebuyit",
+        )
+        custom_hashtags = [h.strip().lstrip("#") for h in tiktok_hashtags_input.split(",") if h.strip()]
+    else:
+        custom_hashtags = None
+
     st.subheader("🎯 Filtres résultats")
     min_score = st.slider("Score tendance minimum", 0, 100, 30)
     show_only_absent = st.checkbox("Absents uniquement", value=False)
@@ -66,7 +82,7 @@ with st.sidebar:
                                help="Produits présents mais stock = 0 → opportunité de réassort")
 
     st.divider()
-    st.caption("v2.0 · © EBM 2025")
+    st.caption("v2.1 · © EBM 2025")
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 st.title("💄 EBM — Trend Gap Analyzer")
@@ -127,6 +143,8 @@ if analyse_btn or "report_df" in st.session_state:
                 amazon_manual=amazon_list,
                 tiktok_manual=tiktok_list,
                 amazon_marketplace=amazon_marketplace,
+                enable_tiktok_scraping=enable_tiktok,
+                tiktok_hashtags=custom_hashtags,
             )
             st.session_state["trends_df"] = trends_df
 

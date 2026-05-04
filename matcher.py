@@ -1,25 +1,28 @@
 """
 matcher.py — Matching intelligent tendances ↔ catalogue EBM
-Compatible RapidFuzz 3.x (process.extract au lieu de extractBests)
-Intègre la notion de stock : Disponible / Proche / Absent / Rupture (tendance)
+Corrections v2.1 :
+- Seuils relevés (58% Proche, 78% Disponible)
+- Vérification de cohérence catégorie (évite Lip Gloss → Hair Gloss)
+- "hair" et "skin" ne sont plus des stopwords (causaient faux matches)
+- Bonus si même catégorie, pénalité si catégories incompatibles
 """
 
 import re
 import pandas as pd
 from typing import Tuple, Optional
-from config import STOPWORDS, MATCH_THRESHOLD_STRONG, MATCH_THRESHOLD_MEDIUM
+from config import (STOPWORDS, MATCH_THRESHOLD_STRONG, MATCH_THRESHOLD_MEDIUM,
+                    MATCH_REQUIRE_SAME_CATEGORY)
 
 try:
     from rapidfuzz import fuzz, process
     RAPIDFUZZ_AVAILABLE = True
 except ImportError:
     RAPIDFUZZ_AVAILABLE = False
-    print("[matcher] RapidFuzz non installé — matching basique activé.")
 
-# Dictionnaire de traduction FR→EN
+# Dictionnaire FR→EN
 FR_EN_DICT = {
-    "huile": "oil", "huiles": "oils", "huile de": "oil",
-    "cheveux": "hair", "capillaire": "hair", "soin": "care",
+    "huile": "oil", "huiles": "oils", "capillaire": "hair",
+    "cheveux": "hair", "soin": "care", "soins": "care",
     "crème": "cream", "creme": "cream", "masque": "mask",
     "shampoing": "shampoo", "après-shampoing": "conditioner",
     "apres-shampoing": "conditioner", "beurre": "butter",
@@ -28,27 +31,53 @@ FR_EN_DICT = {
     "sérum": "serum", "peau": "skin", "nourrissant": "nourishing",
     "hydratant": "moisturizing", "pousse": "growth", "croissance": "growth",
     "perruque": "wig", "perruques": "wigs", "tresse": "braid",
-    "lacet": "lace", "frontal": "frontal", "savon": "soap",
-    "noir": "black", "blanc": "white", "karité": "shea", "karite": "shea",
-    "avocat": "avocado", "brillant": "shine", "éclat": "glow",
+    "lacet": "lace", "savon": "soap", "noir": "black", "blanc": "white",
+    "karité": "shea", "karite": "shea", "avocat": "avocado",
     "fortifiant": "strengthening", "réparateur": "repairing",
     "bouclés": "curly", "naturels": "natural", "secs": "dry",
     "complément": "supplement", "supplément": "supplement",
     "maquillage": "makeup", "fond de teint": "foundation",
-    "spray": "spray", "gel": "gel", "lotion": "lotion",
     "gommage": "scrub", "exfoliant": "exfoliant",
-    "dentelle": "lace", "coloration": "color",
+    "dentelle": "lace", "coloration": "color", "lèvres": "lips",
+    "brillance": "gloss", "eclat": "glow", "éclat": "glow",
 }
+
+# Catégories incompatibles — un match entre ces catégories est forcément faux
+INCOMPATIBLE_CATEGORIES = [
+    {"Haircare", "Skincare"},
+    {"Haircare", "Makeup"},
+    {"Haircare", "Supplements beauté"},
+    {"Wigs", "Skincare"},
+    {"Wigs", "Makeup"},
+    {"Wigs", "Supplements beauté"},
+    {"Wigs", "Oils"},
+    {"Makeup", "Supplements beauté"},
+]
+
+
+def _categories_compatible(cat1: str, cat2: str) -> bool:
+    """Vérifie si deux catégories sont compatibles pour un match."""
+    if not cat1 or not cat2:
+        return True
+    if cat1 == cat2:
+        return True
+    pair = {cat1, cat2}
+    for incompatible in INCOMPATIBLE_CATEGORIES:
+        if pair == incompatible:
+            return False
+    return True
 
 
 def normalize_for_matching(text: str) -> str:
-    """Normalise un texte pour le matching (suppression stopwords, FR→EN)."""
+    """Normalise un texte pour le matching (FR→EN, suppression stopwords)."""
     if not isinstance(text, str):
         return ""
     text = text.lower().strip()
     for fr, en in FR_EN_DICT.items():
         text = re.sub(r"\b" + re.escape(fr) + r"\b", en, text)
     text = re.sub(r"[^\w\s]", " ", text)
+    # Supprime les tailles/volumes qui causent des faux matches
+    text = re.sub(r"\b\d+\s*(ml|g|oz|mg|cl|l)\b", "", text)
     tokens = [t for t in text.split() if t not in STOPWORDS and len(t) > 1]
     return " ".join(tokens)
 
@@ -79,47 +108,45 @@ def tag_match_score(trend_keyword: str, tags_list: list) -> float:
     for tag in tags_list:
         tag_tokens = set(normalize_for_matching(tag).split())
         if kw_tokens & tag_tokens:
-            return 60.0
+            return 50.0
     return 0.0
 
 
 def find_best_match(
     trend_product: str,
     trend_keyword: str,
+    trend_category: str,
     catalogue_df: pd.DataFrame,
 ) -> Tuple[float, Optional[str], Optional[str], Optional[str], Optional[float]]:
     """
     Cherche le meilleur match dans le catalogue.
-
-    Retourne : (score_match, titre_catalogue, handle, stock_status, inventory_qty)
+    Applique une pénalité si les catégories sont incompatibles.
     """
     trend_norm = normalize_for_matching(trend_product)
-    kw_norm = normalize_for_matching(trend_keyword)
+    kw_norm    = normalize_for_matching(trend_keyword)
 
-    best_score = 0.0
-    best_title = None
-    best_handle = None
+    best_score        = 0.0
+    best_title        = None
+    best_handle       = None
     best_stock_status = None
-    best_inventory = None
+    best_inventory    = None
 
     if catalogue_df.empty:
         return 0.0, None, None, None, None
 
-    # Pré-filtrage RapidFuzz 3.x — process.extract (remplace extractBests)
+    # Pré-filtrage RapidFuzz
     if RAPIDFUZZ_AVAILABLE and len(catalogue_df) > 30:
         titles_norm = catalogue_df["title_normalized"].tolist()
         candidates = process.extract(
-            trend_norm,
-            titles_norm,
+            trend_norm, titles_norm,
             scorer=fuzz.token_set_ratio,
-            score_cutoff=20,
-            limit=10,
+            score_cutoff=25,
+            limit=15,
         )
         candidate_indices = []
         for c in candidates:
-            title_val = c[0]
             try:
-                candidate_indices.append(titles_norm.index(title_val))
+                candidate_indices.append(titles_norm.index(c[0]))
             except ValueError:
                 pass
         sub_df = catalogue_df.iloc[candidate_indices] if candidate_indices else catalogue_df
@@ -127,7 +154,10 @@ def find_best_match(
         sub_df = catalogue_df
 
     for _, row in sub_df.iterrows():
-        cat_norm = row["title_normalized"]
+        cat_norm     = row["title_normalized"]
+        row_category = row.get("category", "")
+
+        # ── Score brut ────────────────────────────────────────────────────────
         score_fuzzy  = fuzzy_score(trend_norm, cat_norm)
         score_kw     = fuzzy_score(kw_norm, cat_norm)
         score_tokens = token_overlap_score(trend_norm, cat_norm)
@@ -139,6 +169,14 @@ def find_best_match(
             score_tokens * 0.20 +
             score_tags   * 0.10
         )
+
+        # ── Bonus même catégorie ──────────────────────────────────────────────
+        if trend_category and row_category:
+            if trend_category == row_category:
+                combined = min(combined * 1.08, 100)  # +8% bonus
+            elif not _categories_compatible(trend_category, row_category):
+                # Catégories incompatibles → pénalité forte
+                combined = combined * 0.45
 
         if combined > best_score:
             best_score        = combined
@@ -161,13 +199,11 @@ def match_trends_to_catalogue(
     catalogue_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """
-    Pour chaque produit tendance, calcule le statut par rapport au catalogue.
-
-    Statuts possibles :
-    - Disponible        : match fort (≥75%) + en stock
-    - Proche            : match moyen (40-74%) + en stock
-    - Rupture (tendance): match fort/moyen MAIS stock = 0 ou rupture
-    - Absent            : aucun match (<40%)
+    Statuts :
+    - Disponible        : match >= 78% + catégories compatibles + en stock
+    - Proche            : match >= 58% + catégories compatibles + en stock
+    - Rupture (tendance): match fort MAIS stock = 0
+    - Absent            : match < 58% OU catégories incompatibles
     """
     if trends_df.empty:
         return trends_df
@@ -183,6 +219,7 @@ def match_trends_to_catalogue(
         score, title, handle, stock_status, inventory = find_best_match(
             row["product"],
             row.get("keyword", row["product"]),
+            row.get("category", ""),
             catalogue_df,
         )
 
@@ -192,7 +229,6 @@ def match_trends_to_catalogue(
         stock_statuses.append(stock_status or "")
         inventories.append(float(inventory) if inventory is not None else 0.0)
 
-        # Logique statut avec stock
         if score >= MATCH_THRESHOLD_STRONG:
             if stock_status in ("Rupture", "Stock faible"):
                 statuts.append("Rupture (tendance)")
@@ -214,7 +250,7 @@ def match_trends_to_catalogue(
     result["matched_inventory_qty"] = inventories
     result["statut"]                = statuts
 
-    print(f"[matcher] Résultats :")
+    print(f"[matcher] Résultats (seuils: Disponible>={MATCH_THRESHOLD_STRONG}%, Proche>={MATCH_THRESHOLD_MEDIUM}%):")
     for s in ["Disponible", "Proche", "Absent", "Rupture (tendance)"]:
         print(f"  {s:22s}: {statuts.count(s)}")
 

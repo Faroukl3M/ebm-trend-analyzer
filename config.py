@@ -1,11 +1,11 @@
 """
-config.py — Configuration centrale de l'outil EBM Trend Analyzer
+config.py — Configuration centrale EBM Trend Analyzer
 """
 
 # ── PONDÉRATION DES SOURCES (doit totaliser 100) ──────────────────────────────
-WEIGHT_GOOGLE = 40   # Google Trends
-WEIGHT_TIKTOK = 35   # TikTok
-WEIGHT_AMAZON = 25   # Amazon
+WEIGHT_GOOGLE = 40
+WEIGHT_TIKTOK = 35
+WEIGHT_AMAZON = 25
 
 # ── CATÉGORIES PRODUITS ───────────────────────────────────────────────────────
 CATEGORIES = [
@@ -54,29 +54,35 @@ CATEGORY_KEYWORDS = {
     ],
 }
 
-# Mots-clés généraux beauté ethnique
 GENERAL_KEYWORDS = [
     "ethnic hair care", "afro hair products", "curly hair products",
     "natural hair growth", "protective hairstyle products",
     "melanin skincare", "dark skin care",
 ]
 
-# ── SEUILS DE MATCHING ────────────────────────────────────────────────────────
-MATCH_THRESHOLD_STRONG = 75    # >= 75% → Disponible
-MATCH_THRESHOLD_MEDIUM = 40    # >= 40% → Proche
-# < 40% → Absent
+# ── SEUILS DE MATCHING — corrigés (anciens : 75/40) ──────────────────────────
+# Problème détecté : trop de faux "Proche" à cause du seuil bas de 40%
+# Exemples de faux matches : "Lip Gloss" → "Hair Gloss", "Lip Oil" → huile capillaire
+MATCH_THRESHOLD_STRONG = 78    # >= 78% → Disponible (produit clairement présent)
+MATCH_THRESHOLD_MEDIUM = 58    # >= 58% → Proche   (produit similaire probable)
+# < 58% → Absent (opportunité)
+
+# Seuil supplémentaire : si match >= 58% mais catégories différentes → forcer Absent
+MATCH_REQUIRE_SAME_CATEGORY = True
 
 # ── SEUIL RECOMMANDATION ──────────────────────────────────────────────────────
-RECOMMENDATION_SCORE_MIN = 45  # Score tendance minimum pour recommander
+RECOMMENDATION_SCORE_MIN = 40
 
 # ── PYTRENDS ─────────────────────────────────────────────────────────────────
-PYTRENDS_GEO = ""          # "" = mondial, "FR" = France, "US" = USA
-PYTRENDS_TIMEFRAME = "today 3-m"   # 3 derniers mois
+PYTRENDS_GEO = ""
+PYTRENDS_TIMEFRAME = "today 3-m"
 PYTRENDS_LANGUAGE = "fr"
 
-# ── STOPWORDS FR/EN pour normalisation ───────────────────────────────────────
+# ── STOPWORDS FR/EN ───────────────────────────────────────────────────────────
+# IMPORTANT : "hair" et "skin" retirés des stopwords — causaient des faux matches
+# (ex : "Lip Gloss" matchait "Hair Gloss" car "hair" était ignoré dans les deux)
 STOPWORDS = {
     "le", "la", "les", "de", "du", "des", "un", "une", "et", "en", "pour",
     "avec", "sans", "sur", "the", "a", "an", "for", "and", "with", "of",
-    "to", "in", "hair", "skin", "beauty", "soin", "cheveux", "peau",
+    "to", "in", "beauty", "soin", "beauté",
 }
